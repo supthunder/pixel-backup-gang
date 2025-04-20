@@ -15,7 +15,7 @@ The main goal is to allow for easy backup of external media via Google Photos on
 graph TD
     A[Windows PC] -->|GUI Upload| B[FastAPI Server]
     B -->|File Transfer| C[Android Client]
-    C -->|Mount as Internal| D[/mnt/runtime/write/emulated/0/the_binding]
+    C -->|Mount as Internal| D["Mount Point<br/>mnt/.../the_binding"]
     D -->|Appears as Internal Storage| E[Google Photos]
     E -->|Unlimited Backup| F[Google Cloud]
 
