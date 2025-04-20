@@ -10,6 +10,7 @@ The main goal is to allow for easy backup of external media via Google Photos on
 
 ## System Architecture
 
+### High-Level Flow
 ```mermaid
 graph TD
     A[Windows PC] -->|GUI Upload| B[FastAPI Server]
@@ -24,6 +25,58 @@ graph TD
     style D fill:#fbb,stroke:#333,stroke-width:2px
     style E fill:#fbf,stroke:#333,stroke-width:2px
     style F fill:#bff,stroke:#333,stroke-width:2px
+```
+
+### Detailed Technical Architecture
+```mermaid
+graph TB
+  subgraph "Windows PC"
+    GUI["Windows GUI Application\ngui.py, assets"]:::gui
+    Server["FastAPI Server\nserver.py"]:::server
+    Upload["Upload Queue & Logic\nupload.py"]:::server
+    Requirements["Requirements\nrequirements.txt"]:::server
+
+    GUI -->|"Start Server"| Server
+    GUI -->|"Watch folder uploads"| Upload
+    Upload -->|"process files"| Server
+  end
+
+  subgraph "Android Phone"
+    Sync["Android Client Sync Service\nsync_service.sh"]:::android
+    subgraph "Mount Layer"
+      MountExt["mount_ext4.sh"]:::mount
+      Remount["remount_vfat.sh"]:::mount
+      Unmount["unmount.sh"]:::mount
+      EnableDebug["enable_tcp_debugging.sh"]:::mount
+      DisableDebug["disable_tcp_debugging.sh"]:::mount
+      FindDev["find_device.sh"]:::mount
+      ShowDev["show_devices.sh"]:::mount
+      StartShell["start_global_shell.sh"]:::mount
+    end
+    Scanner["Media Scanner"]:::scanner
+    Photos["Google Photos App"]:::scanner
+
+    Server -->|"HTTP POST /upload"| Sync
+    Sync -->|"mount ext4"| MountExt
+    Sync -->|"remount vfat"| Remount
+    MountExt --> Scanner
+    Scanner -->|"file visible"| Photos
+    Photos -->|"sync backup"| Cloud
+  end
+
+  Cloud["Google Cloud Storage"]:::cloud
+
+  CI["CI Pipeline\nci.yml"]:::external
+  Make["Makefile"]:::external
+  Doc["Project Overview\nREADME.md"]:::external
+
+classDef gui fill:#DDA0DD,stroke:#333,stroke-width:1px;
+classDef server fill:#ADD8E6,stroke:#333,stroke-width:1px;
+classDef android fill:#90EE90,stroke:#333,stroke-width:1px;
+classDef mount fill:#FF6347,stroke:#333,stroke-width:1px;
+classDef scanner fill:#D3D3D3,stroke:#333,stroke-width:1px;
+classDef cloud fill:#87CEFA,stroke:#333,stroke-width:1px;
+classDef external fill:#F5F5F5,stroke:#333,stroke-width:1px;
 ```
 
 ## Features
