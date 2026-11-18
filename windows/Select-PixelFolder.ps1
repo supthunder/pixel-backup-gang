@@ -3,11 +3,20 @@
 <#
 .SYNOPSIS
     Share a selected PC folder read-only for one Pixel session.
+.PARAMETER Reader
+    Existing local account with read access. Defaults to PixelReader on this PC.
+.PARAMETER Folder
+    Full path of a local folder. Omitting it opens the folder picker.
+.PARAMETER OnShareReady
+    Optional status callback that receives the live Windows SMB share object
+    after its ACL is verified. Returning from the callback ends the session.
 .EXAMPLE
-    .\windows\Select-PixelFolder.ps1 -Reader "$env:COMPUTERNAME\PixelReader"
+    .\windows\Select-PixelFolder.ps1
 .NOTES
     Run in 64-bit Windows PowerShell. Use an enabled local user with a password
     and permission to read the selected files. Pair the Pixel with this PC first.
+    The sharing window can grant the paired PixelReader NTFS Read & execute on
+    a new private folder. Choosing that action starts a new sharing session.
     Keep the sharing dialog open while the Pixel reads the folder. Verify
     backup in Google Photos and close open previews before clicking OK.
     The paired watcher detaches the folder when the session ends.
@@ -19,9 +28,11 @@
         Format-List Name,ScopeName,Path,Description,Temporary
 #>
 param(
-    [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
-    [string]$Reader
+    [string]$Reader = "$env:COMPUTERNAME\PixelReader",
+    [ValidateNotNullOrEmpty()]
+    [string]$Folder,
+    [scriptblock]$OnShareReady
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,19 +49,89 @@ function Get-ReaderAccount([string]$Account) {
     "$env:COMPUTERNAME\$($user.Name)"
 }
 
-function Show-ShareStatus([string]$Address, [string]$Folder, [string]$Account) {
+function Show-FolderAccessDialog([string]$Message) {
+    $form = [System.Windows.Forms.Form]::new()
+    try {
+        $form.Text = 'PixelBackup is sharing'
+        $form.StartPosition = 'CenterScreen'
+        $form.FormBorderStyle = 'FixedDialog'
+        $form.MaximizeBox = $false
+        $form.MinimizeBox = $false
+        $form.AutoSize = $true
+        $form.AutoSizeMode = 'GrowAndShrink'
+        $form.Padding = [System.Windows.Forms.Padding]::new(12)
+
+        $layout = [System.Windows.Forms.FlowLayoutPanel]::new()
+        $layout.FlowDirection = 'TopDown'
+        $layout.AutoSize = $true
+        $layout.WrapContents = $false
+        $label = [System.Windows.Forms.Label]::new()
+        $label.AutoSize = $true
+        $label.MaximumSize = [System.Drawing.Size]::new(520, 0)
+        $label.UseMnemonic = $false
+        $label.Text = $Message
+        $layout.Controls.Add($label)
+
+        $buttons = [System.Windows.Forms.FlowLayoutPanel]::new()
+        $buttons.AutoSize = $true
+        $grant = [System.Windows.Forms.Button]::new()
+        $grant.Text = 'Give PixelReader read access'
+        $grant.AutoSize = $true
+        $grant.DialogResult = 'Retry'
+        $stop = [System.Windows.Forms.Button]::new()
+        $stop.Text = 'Stop sharing'
+        $stop.AutoSize = $true
+        $stop.DialogResult = 'OK'
+        $buttons.Controls.AddRange(@($stop, $grant))
+        $layout.Controls.Add($buttons)
+        $form.Controls.Add($layout)
+        $form.AcceptButton = $stop
+        $form.CancelButton = $stop
+        $form.ShowDialog()
+    } finally {
+        $form.Dispose()
+    }
+}
+
+function Grant-SelectedFolderAccess([string]$Folder) {
+    $acl = Get-Acl -LiteralPath $Folder
+    $rules = $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])
+    $read = [Security.AccessControl.FileSystemRights]::ReadAndExecute
+    if ($rules | Where-Object { $_.AccessControlType -eq 'Deny' -and ($_.FileSystemRights -band $read) }) {
+        throw 'An NTFS deny rule on this folder covers read or execute access. Review its existing permissions in Windows Security.'
+    }
+    $null = & (Join-Path $PSScriptRoot 'Initialize-PixelReader.ps1') -LibraryPath $Folder -ExistingReaderOnly
+}
+
+function Show-ShareStatus([string]$Address, [string]$Folder, [string]$Account, [bool]$OfferGrant) {
+    Add-Type -AssemblyName System.Windows.Forms
     $message = @"
 $Address
 $Folder
 
 Read access for $Account
 
-Keep this window open while the Pixel reads the folder. After you verify backup in Google Photos and close any open previews, click OK to stop sharing. The paired watcher will detach the folder.
+Keep this window open while the Pixel reads the folder. Verify backup in Google Photos and close any open previews before you stop sharing. The paired watcher will detach the folder.
 "@
-    [void][System.Windows.Forms.MessageBox]::Show($message, 'PixelBackup is sharing', 'OK', 'Information')
+    $directory = [System.IO.DirectoryInfo]::new($Folder)
+    if (-not $OfferGrant -or $Account -ne "$env:COMPUTERNAME\PixelReader" -or -not $directory.Parent -or
+        [System.IO.DriveInfo]::new($directory.Root.FullName).DriveFormat -ne 'NTFS') {
+        [void][System.Windows.Forms.MessageBox]::Show($message, 'PixelBackup is sharing', 'OK', 'Information')
+        return
+    }
+
+    $message += "`r`n`r`nIf the Pixel cannot open this folder, close any open previews and choose Give PixelReader read access. This grants NTFS Read & execute on this folder and inheriting files and subfolders. The grant stays after sharing stops. The folder will reopen for a fresh scan."
+    while ((Show-FolderAccessDialog $message) -eq 'Retry') {
+        try {
+            Grant-SelectedFolderAccess $Folder
+            return 'Republish'
+        } catch {
+            [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'PixelBackup folder access', 'OK', 'Error')
+        }
+    }
 }
 
-function Publish-PixelFolder([string]$Folder, [string]$Account) {
+function Publish-PixelFolder([string]$Folder, [string]$Account, [scriptblock]$OnShareReady, [bool]$OfferGrant = $true) {
     if ($Folder -notmatch '^[A-Za-z]:\\' -or
         [System.IO.DriveInfo]::new([System.IO.Path]::GetPathRoot($Folder)).DriveType -eq [System.IO.DriveType]::Network) {
         throw 'Select a folder on a local drive attached to this PC.'
@@ -77,7 +158,11 @@ function Publish-PixelFolder([string]$Folder, [string]$Account) {
         }
         $address = "\\$env:COMPUTERNAME\$shareName"
         Write-Host "$address shares $Folder read-only for $Account (scope $scope, $ownershipTag)."
-        Show-ShareStatus $address $Folder $Account
+        if ($OnShareReady) {
+            & $OnShareReady $share
+        } else {
+            Show-ShareStatus $address $Folder $Account $OfferGrant
+        }
     } finally {
         try {
             $current = @(Get-SmbShare -IncludeHidden | Where-Object { $_.Name -eq $shareName -and $_.ScopeName -eq $scope })
@@ -106,7 +191,7 @@ function Select-PhotoFolder {
     }
 }
 
-function Start-PixelPicker([string]$Account) {
+function Start-PixelPicker([string]$Account, [string]$Folder, [scriptblock]$OnShareReady) {
     $isOwner = $false
     try {
         $pickerLock = [System.Threading.Mutex]::new($true, 'Global\PixelBackupGang.FolderPicker', [ref]$isOwner)
@@ -116,12 +201,26 @@ function Start-PixelPicker([string]$Account) {
     try {
         if (-not $isOwner) { throw 'Another PixelBackup picker is already open on this PC.' }
         $readerAccount = Get-ReaderAccount $Account
-        $folderPath = Select-PhotoFolder
-        if ($folderPath) { Publish-PixelFolder $folderPath $readerAccount }
+        if (-not $Folder) { $Folder = Select-PhotoFolder }
+        if (-not $Folder) { return }
+        if ($OnShareReady) {
+            Publish-PixelFolder $Folder $readerAccount $OnShareReady
+            return
+        }
+        $action = Publish-PixelFolder $Folder $readerAccount
+        if ($action -eq 'Republish') { Publish-PixelFolder $Folder $readerAccount -OfferGrant $false }
     } finally {
         if ($isOwner) { $pickerLock.ReleaseMutex() }
         $pickerLock.Dispose()
     }
 }
 
-Start-PixelPicker $Reader
+try {
+    Start-PixelPicker $Reader $Folder $OnShareReady
+} catch {
+    if (-not $OnShareReady) {
+        Add-Type -AssemblyName System.Windows.Forms
+        [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'PixelBackup', 'OK', 'Error')
+    }
+    throw
+}

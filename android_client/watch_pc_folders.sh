@@ -44,6 +44,31 @@ announce() {
     fi
 }
 
+list_pc_shares() {
+    # FD 3 carries only stdout to the caller. Inspect rclone's stderr in memory
+    # so a diagnostic cannot become a share name or end up in a log.
+    if diagnosis=$(timeout 12 rclone lsf pixelpc: --dirs-only --dir-slash=false --max-depth 1 \
+        --config "$config" --ask-password=false --contimeout 4s --timeout 7s \
+        --retries 1 --low-level-retries 1 2>&1 >&3 3>&-); then
+        return 0
+    fi
+    # go-smb2 renders NTSTATUS replies as English MS-ERREF messages. A
+    # transport failure or a generic access denial can have other causes.
+    case "$diagnosis" in
+        *'response error: The attempted logon is invalid.'*|\
+        *'response error: The specified account does not exist.'*|\
+        *'response error: The referenced account is currently disabled'*|\
+        *'response error: The user account has been automatically locked'*|\
+        *'response error: The user account has expired.'*|\
+        *'response error: The user account password has expired.'*|\
+        *'response error: The user password must be changed before logging on'*|\
+        *'response error: When trying to update a password,'*'the current password is not correct.'*|\
+        *'response error: Indicates a referenced user name and authentication information are valid, but some user account restriction'*|\
+        *'response error: The authentication failed because NTLM was blocked.'*) return 2 ;;
+    esac
+    return 1
+}
+
 # Check both the parent and the kernel start time before signalling a numeric
 # PID. Only the helper directly started by this watcher belongs to this session.
 child_start() {
@@ -86,9 +111,7 @@ while [ "$stop" -eq 0 ]; do
     wanted=
     # Listing the root of an SMB remote asks for share names through SMB RPC.
     # No selected directory or media files are traversed during discovery.
-    if shares=$(timeout 12 rclone lsf pixelpc: --dirs-only --dir-slash=false --max-depth 1 \
-        --config "$config" --ask-password=false --contimeout 4s --timeout 7s \
-        --retries 1 --low-level-retries 1 2>/dev/null); then
+    if shares=$(list_pc_shares 3>&1); then
         delay=5
         matches=$(printf '%s\n' "$shares" | LC_ALL=C grep -E '^PixelBackup-[0-9a-f]{32}$')
         case "$matches" in
@@ -98,6 +121,9 @@ while [ "$stop" -eq 0 ]; do
             *) wanted=$matches ;;
         esac
     else
+        if [ "$?" -eq 2 ]; then
+            die "The PC rejected the SMB login. Check the paired account and credentials, then restart the watcher."
+        fi
         announce "Cannot list the PC's shares. Waiting for the configured PC or account."
         delay=$((delay * 2))
         if [ "$delay" -gt 30 ]; then delay=30; fi

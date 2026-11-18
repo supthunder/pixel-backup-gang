@@ -23,7 +23,8 @@ scripts/enable_tcp_debugging.sh \
 scripts/disable_tcp_debugging.sh \
 scripts/start_global_shell.sh \
 android_client/mount_pc_folder.sh \
-android_client/watch_pc_folders.sh
+android_client/watch_pc_folders.sh \
+android_client/start_pc_watcher.sh
 
 .PHONY: release
 release: shellcheck $(ARCHIVE)

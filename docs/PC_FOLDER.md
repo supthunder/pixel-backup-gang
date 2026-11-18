@@ -1,93 +1,71 @@
 # Share a Windows folder with the Pixel
 
-This pilot exposes one local Windows folder, including existing subdirectories, to the owner profile on a rooted Android 10 Pixel. Keep Windows awake and the phone powered during the session. The Windows picker gives each session a unique SMB share name. The phone watches that PC for a new session and presents each selection at the same Android path. The watcher runs in the foreground and can stay ready between batches.
+Pair the PC and phone once. After that, double-click **Select-PixelFolder.cmd**, choose a finished photo folder and leave the dialog open. The Pixel discovers the temporary read-only Windows share over Wi-Fi. Google Photos can back up its media while the originals stay on the PC.
 
-## One-time Windows setup
+## One-time Windows and Pixel setup
 
-1. Create an ordinary, password-backed local Windows user named `PixelReader`. Give that user **Read & execute**, **List folder contents**, and **Read** in the selected test folder’s **Properties → Security**, including the files and subfolders. For later selections, inherited read permission on the photo-library parent can cover its albums. The picker grants read access at the SMB share level. Windows also applies the folder’s existing filesystem permissions. [Windows local accounts](https://support.microsoft.com/en-us/windows/security/identity-signin/manage-user-accounts-in-windows) · [Windows file sharing](https://support.microsoft.com/en-us/windows/experience/connectivity-networking/file-sharing-over-a-network-in-windows)
-2. Use your private home network. The phone must be able to reach Windows file sharing, normally TCP 445. If the firewall blocks it, scope the private-network file-sharing rule to the phone’s reserved LAN address. Keep the share off internet port forwarding. Note the PC's LAN address and computer name for the phone configuration.
-3. In elevated, 64-bit **Windows PowerShell**, run the picker from the repository root. For the first session, pick a folder with a previously unuploaded JPEG and a short MP4 directly inside it. Keep the status dialog open.
+You need a folder on a local NTFS, exFAT, FAT or FAT32 drive, 64-bit Windows PowerShell 5.1, Android Platform Tools and a USB data cable for pairing. The installer targets a Magisk-rooted original Pixel or Pixel XL on stock Android 10 with SELinux enforcing. Its stock kernel supports FUSE. [Android Platform Tools](https://developer.android.com/tools/releases/platform-tools) · [Pixel kernel configuration](https://android.googlesource.com/kernel/msm/+/72a7a64494e033f2213c9701dbf137d277bf2026/arch/arm64/configs/marlin_defconfig)
 
-   ```powershell
-   .\windows\Select-PixelFolder.ps1 -Reader "$env:COMPUTERNAME\PixelReader"
-   ```
-
-   For recurring use, a Windows shortcut can open this script with the same reader argument. Set the shortcut to run as administrator so Windows can create the session share.
-
-   The picker uses Windows' SMB service, verifies that the share grants the named reader read-only access, and leaves the selected files in place. An existing share matching the pilot’s session name causes it to stop. Normal dialog closure removes the share created by that session. After an abrupt process exit, inspect `Get-SmbShare | Where-Object Name -like 'PixelBackup-*' | Format-List Name,Path,ScopeName,Description,Temporary` before taking action. A temporary share expires when Windows restarts. [Microsoft SMB share behavior](https://learn.microsoft.com/en-us/powershell/module/smbshare/new-smbshare#-temporary)
-
-## One-time Pixel setup
-
-The phone needs Magisk root, an Android build of rclone with the SMB backend, and its matching FUSE helper. The stock `QP1A.191005.007.A3` kernel already includes FUSE. To identify a phone connected by USB, use `adb -d shell getprop ro.product.device` and `adb -d shell getprop ro.build.id`. When Android asks, authorize your own PC on the phone. [Android Platform Tools](https://developer.android.com/tools/releases/platform-tools) · [Stock kernel](https://android.googlesource.com/kernel/msm/+/72a7a64494e033f2213c9701dbf137d277bf2026/arch/arm64/configs/marlin_defconfig)
-
-1. One maintained source of compatible userspace packages is Termux. Install Termux from a supported distribution channel, then run these commands as its ordinary app user. The tested Android versions were rclone 1.76.0 and fusermount3 3.18.3. The `libfuse3` package provides the helper. An older rclone 1.60.1 client could read a known share in our Linux test but failed to discover share names on a server requiring SMB signing. The older Magisk module linked in the original SMB report is archived. [Termux installation](https://github.com/termux/termux-app#installation) · [rclone package](https://github.com/termux/termux-packages/blob/master/packages/rclone/build.sh) · [FUSE helper package](https://github.com/termux/termux-packages/blob/master/root-packages/libfuse3/build.sh)
-
-   ```sh
-   pkg install rclone
-   pkg install root-repo
-   pkg install libfuse3
-   ```
-
-2. From the Windows checkout, copy both scripts to the phone and open an interactive shell.
+1. Connect both devices to your private home network. On the PC run `ipconfig` and find the **IPv4 Address** of the Wi-Fi or Ethernet adapter the phone can reach. Use that PC address during pairing. Reserving it in your router keeps the pairing valid after restarts. Windows file sharing uses TCP 445. If Windows Firewall blocks the connection, restrict the inbound SMB permission to the **Private** profile and the Pixel's reserved LAN address. Keep SMB off internet port forwarding. [Windows file sharing](https://support.microsoft.com/en-us/windows/experience/connectivity-networking/file-sharing-over-a-network-in-windows)
+2. Enable USB debugging on the Pixel. Connect it as the only USB phone, unlock its owner profile and approve the PC's debugging key. Open **Windows PowerShell as administrator** at the repository root and use the same window for all setup commands. ADB should print `sailfish` for the Pixel or `marlin` for the Pixel XL. [Android debugging setup](https://developer.android.com/tools/adb#Enabling)
 
    ```powershell
-   adb -d push android_client/mount_pc_folder.sh /data/local/tmp/pbg-mount-pc-folder.sh
-   adb -d push android_client/watch_pc_folders.sh /data/local/tmp/pbg-watch-pc-folders.sh
-   adb -d shell
+   $adb = (Get-Command adb.exe -ErrorAction SilentlyContinue).Source
+   if (-not $adb) { $adb = Read-Host 'Full path to the extracted adb.exe' }
+   & $adb -d shell getprop ro.product.device
+   $tools = .\windows\Get-PixelTools.ps1
    ```
 
-3. In the phone shell, enter Magisk's global mount namespace and prepare a private configuration directory. Grant **Shell** root in Magisk if asked. On stock builds where the namespace check fails, use `nsenter -t 1 -m -- /system/bin/sh` from the root shell and set the PATH again. [MagiskSU options](https://topjohnwu.github.io/Magisk/tools.html#magisksu) · [Upstream namespace setup](https://github.com/master-hax/pixel-backup-gang/blob/7c7c311/docs/EXTERNAL_DRIVES.md#setup)
+   The tool downloader fetches the pinned Android ARM64 rclone and FUSE helper from Termux, verifies their SHA-256 hashes and returns their local directory. If a personal Windows PC blocks local scripts under its default `Restricted` policy, run `powershell.exe -NoProfile -ExecutionPolicy RemoteSigned` in the elevated window and repeat step 2 in that shell. This setting lasts for that process. [Tool downloader](../windows/Get-PixelTools.ps1) · [Windows PowerShell execution policies](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies?view=powershell-5.1)
 
-   ```sh
-   su -mm
-   umask 077
-   export PATH="$PATH:/data/data/com.termux/files/usr/bin"
-   mkdir -p /data/adb/pixel-backup
-   chmod 700 /data/adb/pixel-backup
-   cp /data/local/tmp/pbg-mount-pc-folder.sh /data/adb/pixel-backup/mount_pc_folder.sh
-   cp /data/local/tmp/pbg-watch-pc-folders.sh /data/adb/pixel-backup/watch_pc_folders.sh
-   chmod 700 /data/adb/pixel-backup/mount_pc_folder.sh /data/adb/pixel-backup/watch_pc_folders.sh
-   command -v rclone
-   command -v fusermount3
-   rclone --config /data/adb/pixel-backup/rclone.conf config
+3. Choose the narrowest library folder containing the albums you plan to share. Enter a dedicated password for the local Windows account `PixelReader`. If this setup already created the account, enter its existing password. On NTFS, the initializer grants the reader inheritable **Read & execute** on the selected folder. Children with separate permissions may need an explicit read grant. FAT-family drives have no per-file access lists. On those drives, read-only access for the Pixel is enforced at the SMB share. You can repeat the command for another library. [Reader setup](../windows/Initialize-PixelReader.ps1) · [Windows filesystem permissions](https://learn.microsoft.com/en-us/windows/win32/fileio/filesystem-functionality-comparison#security)
+
+   ```powershell
+   $library = Read-Host 'Full path to your existing photo library folder'
+   $readerPassword = Read-Host 'Windows password for PixelReader' -AsSecureString
+   .\windows\Initialize-PixelReader.ps1 -LibraryPath $library -Password $readerPassword
+   $credential = [PSCredential]::new("$env:COMPUTERNAME\PixelReader", $readerPassword)
    ```
 
-4. In rclone's interactive configuration, create a remote named `pixelpc`. Select backend `smb`, set the host to the PC's LAN address, use `PixelReader` as the user, the computer name as its local account domain, and enter the reader’s password at the prompt. Save the remote. Rclone's stored password is reversible, so keep the config in the root-only directory. Confirm rclone lists the `PixelBackup-…` session shown in the open Windows dialog.
+4. Pair with the **PC's LAN IPv4 address** from step 1. When Magisk asks, allow root for **Shell**. Keep the phone unlocked and connected until the installer finishes.
 
-   ```sh
-   chmod 600 /data/adb/pixel-backup/rclone.conf
-   rclone --config /data/adb/pixel-backup/rclone.conf lsf pixelpc: --dirs-only --dir-slash=false
+   ```powershell
+   $pcAddress = Read-Host 'PC LAN IPv4 address reachable from your Pixel'
+   .\windows\Install-PixelWatcher.ps1 -Adb $adb -ToolsDirectory $tools -ComputerAddress $pcAddress -Credential $credential
    ```
 
-   A listing verifies SMB authentication. The next step checks the separate Android storage view. [rclone SMB settings](https://rclone.org/smb/) · [rclone credential storage](https://rclone.org/commands/rclone_obscure/)
+   The installer checks the Pixel can authenticate to SMB, starts the watcher and installs a Magisk boot script. After each reboot, unlock the Pixel's owner profile once. The watcher waits for the PC and a folder selection. Daily use works over Wi-Fi, so you can disconnect the USB cable after pairing. The reader's SMB password is stored in reversible rclone form in the phone's root-only `/data/adb/pixel-backup/rclone.conf`. [Installer](../windows/Install-PixelWatcher.ps1) · [Watcher startup](../android_client/start_pc_watcher.sh) · [rclone credential storage](https://rclone.org/commands/rclone_obscure/)
 
 ## Mount and verify
 
-1. With the owner profile unlocked, start the watcher in the global root shell. It can start before or after the PC picker. Use a terminal on the phone if you want to unplug the debugging cable. After a phone restart, unlock it and start the watcher again with the same `su -mm` and PATH setup.
+1. Put a previously unuploaded JPEG and a short MP4 directly inside a test folder in the prepared library. On the PC, double-click **windows/Select-PixelFolder.cmd**, accept the administrator prompt and select that folder. Keep Windows awake and leave the sharing dialog open. The watcher exposes the folder at `/storage/emulated/0/PixelBackup` and requests an Android media scan. Rclone reads the media with its file-content disk cache off. [Windows launcher](../windows/Select-PixelFolder.cmd) · [Mount helper](../android_client/mount_pc_folder.sh) · [rclone caching](https://rclone.org/commands/rclone_mount/#vfs-cache-mode-off)
+2. On the Pixel, open Google Photos → **Collections → On this device** (older versions use **Library**). Open the test photo and play the video. Select the intended backup account, then go to **Photos settings → Backup → Back up device folders** and enable the test folder. For nested albums, check each folder Photos actually shows. A `.nomedia` file can suppress indexing in its folder and all descendants. [Google device-folder backup](https://support.google.com/photos/answer/6193313?co=GENIE.Platform%3DAndroid&hl=en) · [Android media indexing](https://developer.android.com/reference/android/provider/MediaStore#MEDIA_IGNORE_FILENAME)
+3. On the phone, check **More → About → Details** for each item. Look for **Backed up**, **Original quality**, and the line saying the item uses no account storage. Use the same check with a paid Google One account. Its overall storage meter can look unchanged even if a small upload counts. If Photos omits the storage line, the item's quota treatment is unverified. In a PC browser signed into the same account, open **Recently added**, find both files and play the video. The web **Info** panel may also identify Android as the upload source. [Google Photos verification](https://support.google.com/photos/answer/6193313?co=GENIE.Platform%3DDesktop&hl=en) · [First-generation Pixel policy](https://support.google.com/photos/answer/6220791?co=GENIE.Platform%3DAndroid&hl=en)
+4. After verifying backup, close open photo or video previews and click **Stop sharing** (or **OK**) in the Windows dialog. The picker removes that session's share. The phone detaches it and waits for the next selection. Double-click the launcher again to choose another folder. The read-only SMB permissions protect the PC originals. [Picker](../windows/Select-PixelFolder.ps1) · [Session watcher](../android_client/watch_pc_folders.sh)
 
-   ```sh
-   /system/bin/sh /data/adb/pixel-backup/watch_pc_folders.sh
-   ```
+On an original Pixel, Windows recorded signed SMB 3.1.1 reads over Wi-Fi from this picker. Google Photos uploaded the test JPEG and video and showed **Original quality** and zero account storage used for each. Both reopened from the Photos library after Windows stopped sharing the folder. [Wi-Fi JPEG receipt](evidence/wifi-jpeg.png) · [Wi-Fi video receipt](evidence/wifi-video.png) · [Hardware results](STORAGE_REVIEW.md#on-device-result)
 
-   The watcher polls the paired PC for session share names. A new session starts the mount helper, which uses a read-only rclone mount with its file-content disk cache off. It presents the mount in Android's app storage views, checks it can list `/storage/emulated/0/PixelBackup`, and requests an Android media scan. It refuses to cover an occupied mount point or a populated local directory. [Session watcher](../android_client/watch_pc_folders.sh) · [Mount helper](../android_client/mount_pc_folder.sh) · [rclone cache behavior](https://rclone.org/commands/rclone_mount/#vfs-cache-mode-off)
-2. On the Pixel, open Google Photos → **Collections → On this device** (older versions use **Library**). Find the test folder, open the JPEG and play or seek in the video. Enable **Backup** for that device folder under the intended Google account. For nested albums, check the folders Photos actually shows. Open each sample’s **More → About → Details** and look for **Backed up**. A `.nomedia` file in a folder or its ancestors can suppress discovery. [Google device-folder backup](https://support.google.com/photos/answer/6193313?co=GENIE.Platform%3DAndroid&hl=en) · [Android media indexing](https://developer.android.com/reference/android/provider/MediaStore#MEDIA_IGNORE_FILENAME)
-3. In a PC browser signed into the same account, find the two items on Google Photos using **Recently added** if their capture dates are old. Open each item and its **Info** panel. Verify Original quality, play the video, and record the upload source and storage-charge message when shown. The source may say “Uploaded from Android device”. The camera model in EXIF identifies the camera that captured the file. A clear per-item statement that it uses no account storage is evidence for that item. If Google omits the charge detail, leave quota unverified. An unchanged aggregate storage meter or a local thumbnail is insufficient. [Google’s web verification instructions](https://support.google.com/photos/answer/6193313?co=GENIE.Platform%3DDesktop&hl=en)
-4. Add one more previously unuploaded file on the PC after the mount starts. The folder listing cache expires after 15 seconds. If an item is missing, wait for that interval, then in a second phone shell request another scan. Android 10 can walk the folder on a scan. The broadcast completion is a request acknowledgement. Reopen Photos and repeat the per-item checks. For a large library, start with one album and measure the time until a representative video is available online. [Android 10 media scanner](https://github.com/aosp-mirror/platform_packages_providers_mediaprovider/blob/android-10.0.0_r47/src/com/android/providers/media/scan/ModernMediaScanner.java#L232-L270)
+## Later additions and connection changes
 
-   ```sh
-   am broadcast --user 0 -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///storage/emulated/0/PixelBackup/
-   ```
+- If a new NTFS folder is unreadable, close any open previews and choose **Give PixelReader read access** in its sharing dialog. On eligible folders this grants the existing reader **Read & execute** on the selected folder and inheriting children, then republishes it for a fresh scan. The NTFS grant persists after the share closes. Simply selecting a folder makes no change to its filesystem permissions. [Picker access handling](../windows/Select-PixelFolder.ps1)
+- Select finished albums when possible. If you add a file during a session, allow at least 15 seconds for rclone's directory cache to expire. If Photos still misses it, close previews and the picker, then reselect the folder for a fresh mount and scan. You can also request a scan over authorized USB with the command below. Check the item in Photos for its backup status. [Android 10 scanner](https://github.com/aosp-mirror/platform_packages_providers_mediaprovider/blob/android-10.0.0_r47/src/com/android/providers/media/scan/ModernMediaScanner.java#L232-L270)
 
-5. Once the items are verified, close any app preview reading the mount and click OK in the Windows dialog. The watcher detaches and waits for the next selection. To switch folders, launch the picker again. To end the watcher itself, press Ctrl-C in its terminal and allow time for open file handles to close. The Windows share permission protects the originals even if a phone app offers to free up space. If the phone helper was force-killed and its mount is still occupied, a phone restart clears the temporary mounts.
+  ```powershell
+  & $adb -d shell am broadcast --user 0 -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///storage/emulated/0/PixelBackup/
+  ```
 
-### Scope of the pilot
+- When albums reuse names such as `IMG_0001.JPG`, select their common parent. The phone then sees distinct paths such as `TripA/IMG_0001.JPG` and `TripB/IMG_0001.JPG`. Android 10 can skip a replacement file if its path, size and modification time all match a previous item. [Android scanner change detection](https://github.com/aosp-mirror/platform_packages_providers_mediaprovider/blob/android-10.0.0_r47/src/com/android/providers/media/scan/ModernMediaScanner.java#L337-L367)
+- If Windows or Wi-Fi goes offline, restore connectivity, leave one picker session open and allow the watcher to rediscover it. If the PC's LAN address changes, restore the reserved address or pair with its new one. The dedicated reader follows Windows password policy. Check its expiry in Windows PowerShell with `Get-LocalUser PixelReader | Select-Object PasswordExpires`. If the password changes or expires, update the account and re-pair the Pixel. The watcher stops after an explicit sign-in rejection.
+- If a picker was force-closed, inspect the temporary shares with `Get-SmbShare -IncludeHidden | Where-Object Name -like 'PixelBackup-*' | Format-List Name,ScopeName,Path,Description,Temporary`. The share's description contains `PixelBackup picker` and a unique ID. The `Path` field identifies the selected folder. Windows clears temporary shares at its next restart. [Windows temporary SMB shares](https://learn.microsoft.com/en-us/powershell/module/smbshare/new-smbshare#-temporary)
 
-If you already have a read-only share on a PC or NAS, you can also run the mount helper with its configured rclone path, for example `/system/bin/sh /data/adb/pixel-backup/mount_pc_folder.sh pixelpc:FamilyPhotos`. End that manual foreground mount with Ctrl-C. Use one mount at a time.
+## Re-pairing or removing the setup
 
-On a physical `sailfish` running `QP1A.191005.007.A3`, the current watcher and mount helper discovered a real SMB share, exposed both PC files to Android and indexed them in MediaStore. Google Photos automatically backed up both and showed Original quality and zero account storage for each. SMB traveled through an authenticated USB debugging connection to a test server on the PC. The Pixel could also open a Wi-Fi TCP connection to native Windows file sharing. Both items also appeared in the main Photos library after the share was disconnected. The per-item receipts come from the phone. The available desktop browser was signed into a different Google account. [Hardware results and receipts](STORAGE_REVIEW.md#on-device-result)
+End the current sharing session and close Photos previews. The installer creates `/data/adb/service.d/80-pixel-backup.sh` and installs `mount_pc_folder.sh`, `watch_pc_folders.sh`, `start_pc_watcher.sh`, `rclone.conf`, `.pairing-receipt`, `bin/rclone` and `bin/fusermount3` under `/data/adb/pixel-backup`. Inspect the boot script and directory listing as root. Keep the configuration and any backup of it readable only by root. Rerunning the installer verifies an existing pairing before starting the watcher. If USB staging was interrupted, its cleanup warning identifies the temporary directories for that attempt. [Magisk boot scripts](https://topjohnwu.github.io/Magisk/guides.html#boot-scripts)
 
-An independent integration test used an authenticated Samba share on the PC, the actual shell helper under mksh, real rclone/FUSE and simulated Android storage views in Linux. An unprivileged process read a generated JPEG and MP4 with hashes matching the PC originals. Attempts to open them for writing returned a read-only filesystem error. Switching between two picker sessions replaced the visible contents and closing the session detached the mount. A later file appeared after the 15-second directory cache expired. Windows PowerShell checks exercised the picker's share creation, permission checks and cleanup using simulated SMB cmdlets. Creating an actual Windows SMB share requires an elevated desktop session.
+To disable automatic startup, move just the verified boot script **outside** `/data/adb/service.d` and reboot the Pixel. To pair with a new address or credential, set aside the verified private installation directory after that reboot, then run the installer again with the new values. For permanent removal, remove the verified installation files you no longer need. On Windows, retire the dedicated local account if it was created for this pairing. First remove its explicit read rule on each prepared NTFS library under **Properties → Security → Advanced**. The default PC tool cache is `%LOCALAPPDATA%\PixelBackup\tools`. [Windows reader setup](../windows/Initialize-PixelReader.ps1)
 
-After initial setup, selecting a folder on the PC triggers mounting and the initial scan while the watcher is running. Files added during an open session may need the rescan above. Start with finished albums to avoid scanning a file while Windows is still writing it. The pilot reports sharing and mounting. Confirm cloud backup and storage treatment in Google Photos. [Evidence and alternatives](STORAGE_REVIEW.md)
+## Alternative tool source
 
-If two albums reuse names such as `IMG_0001.JPG`, select their common parent so Android sees `TripA/IMG_0001.JPG` and `TripB/IMG_0001.JPG` under distinct paths. Selecting each album separately gives both files the same path on the phone. Android 10's scanner can skip a different file at that path if its size and modification time also match. [Android scanner change detection](https://github.com/aosp-mirror/platform_packages_providers_mediaprovider/blob/android-10.0.0_r47/src/com/android/providers/media/scan/ModernMediaScanner.java#L337-L367)
+The Windows installer checks both executables against the pinned hashes. If the packages are unavailable from its download URL, recover those exact versions from a trusted Termux mirror or use the manual foreground watcher. Termux supplies rclone and its FUSE helper with `pkg install rclone`, `pkg install root-repo` and `pkg install libfuse3`. Run those package commands as the Termux app user. The versions tested on the Pixel were rclone 1.76.0 and fusermount3 3.18.3. [Termux installation](https://github.com/termux/termux-app#installation) · [rclone package](https://github.com/termux/termux-packages/blob/master/packages/rclone/build.sh) · [FUSE package](https://github.com/termux/termux-packages/blob/master/root-packages/libfuse3/build.sh)
+
+For a manual foreground run, enter the global root mount namespace, use `umask 077`, and create a root-only `/data/adb/pixel-backup` directory. Put `watch_pc_folders.sh` and `mount_pc_folder.sh` there. Place verified copies of both executables in a root-owned directory on PATH. Run `rclone --config /data/adb/pixel-backup/rclone.conf config` and create a remote named `pixelpc` with backend `smb`, the PC's LAN address, `PixelReader`, the computer name as its domain and the reader password. Give the configuration mode 600. With the owner profile unlocked, start `/system/bin/sh /data/adb/pixel-backup/watch_pc_folders.sh`. Leave that terminal open and press Ctrl-C after the session ends. Use one watcher at a time. [Manual watcher](../android_client/watch_pc_folders.sh) · [rclone SMB settings](https://rclone.org/smb/) · [Global namespace setup](https://github.com/master-hax/pixel-backup-gang/blob/7c7c311/docs/EXTERNAL_DRIVES.md#setup)
