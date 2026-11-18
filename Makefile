@@ -1,4 +1,5 @@
 PBG_VERSION ?= snapshot
+ARCHIVE := pixel-backup-gang-$(subst /,-,$(PBG_VERSION)).tar.gz
 
 # the directory on the pixel where the scripts will be installed
 DEVICE_INSTALL_DIRECTORY := /data/local/tmp
@@ -21,16 +22,18 @@ scripts/show_devices.sh \
 scripts/enable_tcp_debugging.sh \
 scripts/disable_tcp_debugging.sh \
 scripts/start_global_shell.sh \
+android_client/mount_pc_folder.sh \
+android_client/watch_pc_folders.sh
 
 .PHONY: release
-release: shellcheck pixel-backup-gang-$(PBG_VERSION).tar.gz
+release: shellcheck $(ARCHIVE)
 
 .PHONY: shellcheck
 shellcheck: $(ALL_SCRIPTS)
 	shellcheck --shell=sh --severity=style --check-sourced $^
 
-pixel-backup-gang-$(PBG_VERSION).tar.gz: $(ALL_SCRIPTS)
-	tar --owner=0 --group=0 -czvf $@ --transform='s,^scripts/,pixel-backup-gang/,' $^
+$(ARCHIVE): $(ALL_SCRIPTS)
+	tar --owner=0 --group=0 -czvf $@ --transform='s,^[^/]*/,pixel-backup-gang/,' $^
 
 .PHONY: clean
 clean:
@@ -40,9 +43,9 @@ clean:
 .PHONY: mobile-install
 mobile-install: release
 	# copy the tarball containing scripts
-	$(HOST_ADB_COMMAND) push ./pixel-backup-gang-$(PBG_VERSION).tar.gz $(DEVICE_TEMP_DIRECTORY)
+	$(HOST_ADB_COMMAND) push ./$(ARCHIVE) $(DEVICE_TEMP_DIRECTORY)
 	# extract the scripts
-	$(HOST_ADB_COMMAND) shell su --command 'tar -xvf $(DEVICE_TEMP_DIRECTORY)/pixel-backup-gang-$(PBG_VERSION).tar.gz -C $(DEVICE_INSTALL_DIRECTORY)'
+	$(HOST_ADB_COMMAND) shell su --command 'tar -xvf $(DEVICE_TEMP_DIRECTORY)/$(ARCHIVE) -C $(DEVICE_INSTALL_DIRECTORY)'
 	# make the scripts executable
 	$(HOST_ADB_COMMAND) shell su --command 'chmod +x $(DEVICE_INSTALL_DIRECTORY)/pixel-backup-gang/*.sh'
 	# done, installed scripts to $(DEVICE_INSTALL_DIRECTORY)/pixel-backup-gang
